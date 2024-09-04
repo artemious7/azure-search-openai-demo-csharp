@@ -244,7 +244,6 @@ If you have existing resources in Azure that you wish to use, you can configure 
 > Ensure Docker is running before running any `azd` provisioning / deployment commands.
 
 1. Run `azd auth login`
-1. After the application deploys, set the environment variable `AZURE_KEY_VAULT_ENDPOINT`. You can find the value in the _.azure/YOUR-ENVIRONMENT-NAME/.env_ file or the Azure portal.
 1. Run the following .NET CLI command to start the ASP.NET Core Minimal API server (client host):
 
    ```dotnetcli
