@@ -82,7 +82,7 @@ public class ReadRetrieveReadChatService
             if (overrides?.RetrievalMode != RetrievalMode.Vector)
             {
                 var getQueryChat = new ChatHistory(@"You are a helpful AI assistant, generate search query for followup question.
-Make your respond simple and precise. Return the query only, do not return any other text.
+Make your response simple and precise. Return the query only, do not return any other text.
 e.g.
 Northwind Health Plus AND standard plan.
 standard plan AND dental AND employee benefit.
