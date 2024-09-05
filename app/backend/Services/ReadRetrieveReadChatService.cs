@@ -11,10 +11,11 @@ namespace MinimalApi.Services;
 public class ReadRetrieveReadChatService
 {
     private readonly ISearchService _searchClient;
-    private readonly Kernel _kernel;
     private readonly IConfiguration _configuration;
     private readonly IComputerVisionService? _visionService;
     private readonly TokenCredential? _tokenCredential;
+    private readonly IChatCompletionService _chat;
+    private readonly ITextEmbeddingGenerationService _embedding;
 
     public ReadRetrieveReadChatService(
         ISearchService searchClient,
@@ -50,10 +51,12 @@ public class ReadRetrieveReadChatService
             }
         }
 
-        _kernel = kernelBuilder.Build();
+        var kernel = kernelBuilder.Build();
         _configuration = configuration;
         _visionService = visionService;
         _tokenCredential = tokenCredential;
+        _chat = kernel.GetRequiredService<IChatCompletionService>();
+        _embedding = kernel.GetRequiredService<ITextEmbeddingGenerationService>();
     }
 
     public async Task<ChatAppResponse> ReplyAsync(
@@ -61,20 +64,12 @@ public class ReadRetrieveReadChatService
         RequestOverrides? overrides,
         CancellationToken cancellationToken = default)
     {
-        var chat = _kernel.GetRequiredService<IChatCompletionService>();
-        var embedding = _kernel.GetRequiredService<ITextEmbeddingGenerationService>();
-        var question = history.LastOrDefault(m => m.IsUser)?.Content is { } userQuestion
+        string? question = history.LastOrDefault(m => m.IsUser)?.Content is { } userQuestion
             ? userQuestion
-            : throw new InvalidOperationException("Use question is null");
+            : throw new InvalidOperationException("User question is null");
 
-        float[]? questionEmbeddings = null;
-        if (overrides?.RetrievalMode != RetrievalMode.Text)
-        {
-            questionEmbeddings = (await embedding.GenerateEmbeddingAsync(question, cancellationToken: cancellationToken)).ToArray();
-        }
-
-        string? query = await UseLLMToGetQueryIfRetrievalModeIsNotVector(question, overrides, chat, cancellationToken);
-        (string documentContents, SupportingContentRecord[] documentContentList) = await UseQueryToSearchRelatedDocs(query, questionEmbeddings, overrides, cancellationToken);
+        string? query = await UseLLMToGetQueryIfRetrievalModeIsNotVector(question, overrides, _chat, cancellationToken);
+        (string documentContents, SupportingContentRecord[] documentContentList) = await UseQueryToSearchRelatedDocs(query, overrides, cancellationToken);
         var images = await RetrieveImagesIfVisionServiceIsAvailable(overrides, question, query, default, cancellationToken);
         (OpenAIPromptExecutionSettings promptExecutingSetting, string ans, string thoughts) = await PutTogetherRelatedDocsAndConversationHistoryToGenerateAnswer();
         return await AddFollowUpQuestionsIfRequested();
@@ -105,9 +100,12 @@ standard plan AND dental AND employee benefit.
 
         // step 2
         // use query to search related docs
-        async Task<(string documentContents, SupportingContentRecord[] documentContentList)> UseQueryToSearchRelatedDocs(string? query, float[]? embeddings, RequestOverrides? overrides, CancellationToken cancellationToken)
+        async Task<(string documentContents, SupportingContentRecord[] documentContentList)> UseQueryToSearchRelatedDocs(string? query, RequestOverrides? overrides, CancellationToken cancellationToken)
         {
-            var documentContentList = await _searchClient.QueryDocumentsAsync(query, embeddings, overrides, cancellationToken);
+            float[]? questionEmbeddings = overrides?.RetrievalMode != RetrievalMode.Text
+                ? (await _embedding.GenerateEmbeddingAsync(question, cancellationToken: cancellationToken)).ToArray()
+                : null;
+            var documentContentList = await _searchClient.QueryDocumentsAsync(query, questionEmbeddings, overrides, cancellationToken);
 
             string documentContents = documentContentList.Length == 0
                 ? "no source available."
@@ -146,7 +144,6 @@ standard plan AND dental AND employee benefit.
                     answerChat.AddAssistantMessage(message.Content);
                 }
             }
-
 
             if (images != null)
             {
@@ -193,7 +190,7 @@ You answer needs to be a json object with the following format.
             };
 
             // get answer
-            var answer = await chat.GetChatMessageContentAsync(
+            var answer = await _chat.GetChatMessageContentAsync(
                            answerChat,
                            promptExecutingSetting,
                            cancellationToken: cancellationToken);
@@ -225,7 +222,7 @@ e.g.
     ""What is the out-of-pocket maximum?""
 ]");
 
-                var followUpQuestions = await chat.GetChatMessageContentAsync(
+                var followUpQuestions = await _chat.GetChatMessageContentAsync(
                     followUpQuestionChat,
                     promptExecutingSetting,
                     cancellationToken: cancellationToken);
