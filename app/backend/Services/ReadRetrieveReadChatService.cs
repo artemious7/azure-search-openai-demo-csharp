@@ -61,33 +61,27 @@ public class ReadRetrieveReadChatService
         RequestOverrides? overrides,
         CancellationToken cancellationToken = default)
     {
-        var top = overrides?.Top ?? 3;
-        var useSemanticCaptions = overrides?.SemanticCaptions ?? false;
-        var useSemanticRanker = overrides?.SemanticRanker ?? false;
-        var excludeCategory = overrides?.ExcludeCategory ?? null;
-        var filter = excludeCategory is null ? null : $"category ne '{excludeCategory}'";
         var chat = _kernel.GetRequiredService<IChatCompletionService>();
         var embedding = _kernel.GetRequiredService<ITextEmbeddingGenerationService>();
-        float[]? embeddings = null;
         var question = history.LastOrDefault(m => m.IsUser)?.Content is { } userQuestion
             ? userQuestion
             : throw new InvalidOperationException("Use question is null");
 
-        string[]? followUpQuestionList = null;
-        if (overrides?.RetrievalMode != RetrievalMode.Text && embedding is not null)
+        float[]? questionEmbeddings = null;
+        if (overrides?.RetrievalMode != RetrievalMode.Text)
         {
-            embeddings = (await embedding.GenerateEmbeddingAsync(question, cancellationToken: cancellationToken)).ToArray();
+            questionEmbeddings = (await embedding.GenerateEmbeddingAsync(question, cancellationToken: cancellationToken)).ToArray();
         }
 
-        string? query = await UseLLMToGetQueryIfRetrievalModeIsNotVector(overrides, chat, question, cancellationToken);
-        (string documentContents, SupportingContentRecord[] documentContentList) = await UseQueryToSearchRelatedDocs(overrides, embeddings, query, cancellationToken);
+        string? query = await UseLLMToGetQueryIfRetrievalModeIsNotVector(question, overrides, chat, cancellationToken);
+        (string documentContents, SupportingContentRecord[] documentContentList) = await UseQueryToSearchRelatedDocs(query, questionEmbeddings, overrides, cancellationToken);
         var images = await RetrieveImagesIfVisionServiceIsAvailable(overrides, question, query, default, cancellationToken);
         (OpenAIPromptExecutionSettings promptExecutingSetting, string ans, string thoughts) = await PutTogetherRelatedDocsAndConversationHistoryToGenerateAnswer();
         return await AddFollowUpQuestionsIfRequested();
 
         // step 1
         // use llm to get query if retrieval mode is not vector
-        static async Task<string?> UseLLMToGetQueryIfRetrievalModeIsNotVector(RequestOverrides? overrides, IChatCompletionService chat, string question, CancellationToken cancellationToken)
+        static async Task<string?> UseLLMToGetQueryIfRetrievalModeIsNotVector(string question, RequestOverrides? overrides, IChatCompletionService chat, CancellationToken cancellationToken)
         {
             string? query = null;
             if (overrides?.RetrievalMode != RetrievalMode.Vector)
@@ -111,19 +105,13 @@ standard plan AND dental AND employee benefit.
 
         // step 2
         // use query to search related docs
-        async Task<(string documentContents, SupportingContentRecord[] documentContentList)> UseQueryToSearchRelatedDocs(RequestOverrides? overrides, float[]? embeddings, string? query, CancellationToken cancellationToken)
+        async Task<(string documentContents, SupportingContentRecord[] documentContentList)> UseQueryToSearchRelatedDocs(string? query, float[]? embeddings, RequestOverrides? overrides, CancellationToken cancellationToken)
         {
             var documentContentList = await _searchClient.QueryDocumentsAsync(query, embeddings, overrides, cancellationToken);
 
-            string documentContents = string.Empty;
-            if (documentContentList.Length == 0)
-            {
-                documentContents = "no source available.";
-            }
-            else
-            {
-                documentContents = string.Join("\r", documentContentList.Select(x => $"{x.Title}:{x.Content}"));
-            }
+            string documentContents = documentContentList.Length == 0
+                ? "no source available."
+                : string.Join("\r", documentContentList.Select(x => $"{x.Title}:{x.Content}"));
             return (documentContents, documentContentList);
         }
 
@@ -220,6 +208,7 @@ You answer needs to be a json object with the following format.
         // add follow up questions if requested
         async Task<ChatAppResponse> AddFollowUpQuestionsIfRequested()
         {
+            string[]? followUpQuestionList = null;
             if (overrides?.SuggestFollowupQuestions is true)
             {
                 var followUpQuestionChat = new ChatHistory(@"You are a helpful AI assistant");
