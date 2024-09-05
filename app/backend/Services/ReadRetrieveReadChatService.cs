@@ -69,7 +69,7 @@ public class ReadRetrieveReadChatService
             : throw new InvalidOperationException("User question is null");
 
         string? query = await UseLLMToGetQueryIfRetrievalModeIsNotVector(question, overrides, _chat, cancellationToken);
-        (string documentContents, SupportingContentRecord[] documentContentList) = await UseQueryToSearchRelatedDocs(query, overrides, cancellationToken);
+        var documentContentsTask = UseQueryToSearchRelatedDocs(query, overrides, cancellationToken);
         var images = await RetrieveImagesIfVisionServiceIsAvailable(overrides, question, query, default, cancellationToken);
         (OpenAIPromptExecutionSettings promptExecutingSetting, string ans, string thoughts) = await PutTogetherRelatedDocsAndConversationHistoryToGenerateAnswer();
         return await AddFollowUpQuestionsIfRequested();
@@ -147,6 +147,7 @@ standard plan AND dental AND employee benefit.
 
             if (images != null)
             {
+                (string documentContents, _) = await documentContentsTask;
                 var prompt = @$"## Source ##
 {documentContents}
 ## End ##
@@ -170,6 +171,7 @@ Don't put your answer between ```json and ```, return the json string directly. 
             }
             else
             {
+                (string documentContents, _) = await documentContentsTask;
                 var prompt = @$" ## Source ##
 {documentContents}
 ## End ##
@@ -239,6 +241,8 @@ e.g.
             }
 
             var responseMessage = new ResponseMessage("assistant", ans);
+            (_, SupportingContentRecord[] documentContentList) = await documentContentsTask;
+
             var responseContext = new ResponseContext(
                 DataPointsContent: documentContentList.Select(x => new SupportingContentRecord(x.Title, x.Content)).ToArray(),
                 DataPointsImages: images?.Select(x => new SupportingImageRecord(x.Title, x.Url)).ToArray(),
