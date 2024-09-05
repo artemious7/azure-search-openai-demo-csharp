@@ -64,19 +64,22 @@ public class ReadRetrieveReadChatService
         RequestOverrides? overrides,
         CancellationToken cancellationToken = default)
     {
-        string? question = history.LastOrDefault(m => m.IsUser)?.Content is { } userQuestion
-            ? userQuestion
-            : throw new InvalidOperationException("User question is null");
+        string question = GetUserQuestion(history);
 
-        string? query = await UseLLMToGetQueryIfRetrievalModeIsNotVector(question, overrides, _chat, cancellationToken);
-        var documentContentsTask = UseQueryToSearchRelatedDocs(query, overrides, cancellationToken);
+        string? query = await UseLLMToGetQueryIfRetrievalModeIsNotVector(question, overrides, cancellationToken);
+        var documentContentsTask = UseQueryToSearchRelatedDocs(query, question, overrides, cancellationToken);
         var images = await RetrieveImagesIfVisionServiceIsAvailable(overrides, question, query, default, cancellationToken);
         (OpenAIPromptExecutionSettings promptExecutingSetting, string ans, string thoughts) = await PutTogetherRelatedDocsAndConversationHistoryToGenerateAnswer();
         return await AddFollowUpQuestionsIfRequested();
 
+        static string GetUserQuestion(ChatMessage[] history)
+        {
+            return history.LastOrDefault(m => m.IsUser)?.Content ?? throw new InvalidOperationException("User question is null");
+        }
+
         // step 1
         // use llm to get query if retrieval mode is not vector
-        static async Task<string?> UseLLMToGetQueryIfRetrievalModeIsNotVector(string question, RequestOverrides? overrides, IChatCompletionService chat, CancellationToken cancellationToken)
+        async Task<string?> UseLLMToGetQueryIfRetrievalModeIsNotVector(string question, RequestOverrides? overrides, CancellationToken cancellationToken)
         {
             string? query = null;
             if (overrides?.RetrievalMode != RetrievalMode.Vector)
@@ -89,7 +92,7 @@ standard plan AND dental AND employee benefit.
 ");
 
                 getQueryChat.AddUserMessage(question);
-                var result = await chat.GetChatMessageContentAsync(
+                var result = await _chat.GetChatMessageContentAsync(
                     getQueryChat,
                     cancellationToken: cancellationToken);
 
@@ -100,7 +103,7 @@ standard plan AND dental AND employee benefit.
 
         // step 2
         // use query to search related docs
-        async Task<(string documentContents, SupportingContentRecord[] documentContentList)> UseQueryToSearchRelatedDocs(string? query, RequestOverrides? overrides, CancellationToken cancellationToken)
+        async Task<(string documentContents, SupportingContentRecord[] documentContentList)> UseQueryToSearchRelatedDocs(string? query, string question, RequestOverrides? overrides, CancellationToken cancellationToken)
         {
             float[]? questionEmbeddings = overrides?.RetrievalMode != RetrievalMode.Text
                 ? (await _embedding.GenerateEmbeddingAsync(question, cancellationToken: cancellationToken)).ToArray()
